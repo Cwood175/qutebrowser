@@ -287,7 +287,7 @@ def handle_certificate_error(
                 cancel_action=error.reject_certificate,
             )
     elif conf == 'load-insecurely':
-        message.error(f'Certificate error: {error}')
+        message.error(f'Certificate error: {error}', loglevel=40)
         error.accept_certificate()
     elif conf == 'block':
         error.reject_certificate()
