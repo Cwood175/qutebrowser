@@ -5,37 +5,50 @@
 """Our own QNetworkAccessManager."""
 
 import collections
-import html
 import dataclasses
-from typing import TYPE_CHECKING, Optional
+import html
 from collections.abc import MutableMapping
+from typing import TYPE_CHECKING, Optional
 
-from qutebrowser.qt.core import pyqtSlot, pyqtSignal, QUrl, QByteArray
-from qutebrowser.qt.network import (QNetworkAccessManager, QNetworkReply, QSslConfiguration,
-                             QNetworkProxy)
-
-from qutebrowser.config import config
-from qutebrowser.utils import (message, log, usertypes, utils, objreg,
-                               urlutils, debug, qtlog)
 from qutebrowser.browser import shared
 from qutebrowser.browser.network import proxy as proxymod
+from qutebrowser.browser.webkit import cache, certificateerror, cookies
+from qutebrowser.browser.webkit.network import (
+    filescheme,
+    networkreply,
+    webkitqutescheme,
+)
+from qutebrowser.config import config
 from qutebrowser.extensions import interceptors
-from qutebrowser.browser.webkit import certificateerror, cookies, cache
-from qutebrowser.browser.webkit.network import (webkitqutescheme, networkreply,
-                                                filescheme)
 from qutebrowser.misc import objects
+from qutebrowser.qt.core import QByteArray, QUrl, pyqtSignal, pyqtSlot
+from qutebrowser.qt.network import (
+    QNetworkAccessManager,
+    QNetworkProxy,
+    QNetworkReply,
+    QSslConfiguration,
+)
+from qutebrowser.utils import (
+    debug,
+    log,
+    message,
+    objreg,
+    qtlog,
+    urlutils,
+    usertypes,
+    utils,
+)
 
 if TYPE_CHECKING:
     from qutebrowser.mainwindow import prompt
 
 
-HOSTBLOCK_ERROR_STRING = '%HOSTBLOCK%'
-_proxy_auth_cache: dict['ProxyId', 'prompt.AuthInfo'] = {}
+HOSTBLOCK_ERROR_STRING = "%HOSTBLOCK%"
+_proxy_auth_cache: dict["ProxyId", "prompt.AuthInfo"] = {}
 
 
 @dataclasses.dataclass(frozen=True)
 class ProxyId:
-
     """Information identifying a proxy server."""
 
     type: QNetworkProxy.ProxyType
@@ -45,22 +58,22 @@ class ProxyId:
 
 def _is_secure_cipher(cipher):
     """Check if a given SSL cipher (hopefully) isn't broken yet."""
-    tokens = [e.upper() for e in cipher.name().split('-')]
+    tokens = [e.upper() for e in cipher.name().split("-")]
     if cipher.usedBits() < 128:
         # https://codereview.qt-project.org/#/c/75943/
         return False
     # OpenSSL should already protect against this in a better way
-    elif cipher.keyExchangeMethod() == 'DH' and utils.is_windows:
+    elif cipher.keyExchangeMethod() == "DH" and utils.is_windows:
         # https://weakdh.org/
         return False
-    elif cipher.encryptionMethod().upper().startswith('RC4'):
+    elif cipher.encryptionMethod().upper().startswith("RC4"):
         # https://en.wikipedia.org/wiki/RC4#Security
         # https://codereview.qt-project.org/#/c/148906/
         return False
-    elif cipher.encryptionMethod().upper().startswith('DES'):
+    elif cipher.encryptionMethod().upper().startswith("DES"):
         # https://en.wikipedia.org/wiki/Data_Encryption_Standard#Security_and_cryptanalysis
         return False
-    elif 'MD5' in tokens:
+    elif "MD5" in tokens:
         # https://www.win.tue.nl/hashclash/rogue-ca/
         return False
     # OpenSSL should already protect against this in a better way
@@ -70,16 +83,16 @@ def _is_secure_cipher(cipher):
     #     return False
     ### These things should never happen as those are already filtered out by
     ### either the SSL libraries or Qt - but let's be sure.
-    elif cipher.authenticationMethod() in ['aNULL', 'NULL']:
+    elif cipher.authenticationMethod() in ["aNULL", "NULL"]:
         # Ciphers without authentication.
         return False
-    elif cipher.encryptionMethod() in ['eNULL', 'NULL']:
+    elif cipher.encryptionMethod() in ["eNULL", "NULL"]:
         # Ciphers without encryption.
         return False
-    elif 'EXP' in tokens or 'EXPORT' in tokens:
+    elif "EXP" in tokens or "EXPORT" in tokens:
         # Weak export-grade ciphers
         return False
-    elif 'ADH' in tokens:
+    elif "ADH" in tokens:
         # No MITM protection
         return False
     ### This *should* happen ;)
@@ -92,8 +105,8 @@ def init():
     ssl_config = QSslConfiguration.defaultConfiguration()
     default_ciphers = ssl_config.ciphers()
     log.init.vdebug(  # type: ignore[attr-defined]
-        "Default Qt ciphers: {}".format(
-            ', '.join(c.name() for c in default_ciphers)))
+        "Default Qt ciphers: {}".format(", ".join(c.name() for c in default_ciphers))
+    )
 
     good_ciphers = []
     bad_ciphers = []
@@ -104,8 +117,9 @@ def init():
             bad_ciphers.append(cipher)
 
     if bad_ciphers:
-        log.init.debug("Disabling bad ciphers: {}".format(
-            ', '.join(c.name() for c in bad_ciphers)))
+        log.init.debug(
+            "Disabling bad ciphers: {}".format(", ".join(c.name() for c in bad_ciphers))
+        )
         ssl_config.setCiphers(good_ciphers)
 
 
@@ -116,7 +130,6 @@ _SavedErrorsType = MutableMapping[
 
 
 class NetworkManager(QNetworkAccessManager):
-
     """Our own QNetworkAccessManager.
 
     Attributes:
@@ -156,8 +169,8 @@ class NetworkManager(QNetworkAccessManager):
         self._tab_id = tab_id
         self._private = private
         self._scheme_handlers = {
-            'qute': webkitqutescheme.handler,
-            'file': filescheme.handler,
+            "qute": webkitqutescheme.handler,
+            "file": filescheme.handler,
         }
         self._set_cookiejar()
         self._set_cache()
@@ -199,8 +212,7 @@ class NetworkManager(QNetworkAccessManager):
         # DownloadManager. In this case, just skip the webview thing.
         if self._tab_id is not None:
             assert self._win_id is not None
-            tab = objreg.get('tab', scope='tab', window=self._win_id,
-                             tab=self._tab_id)
+            tab = objreg.get("tab", scope="tab", window=self._win_id, tab=self._tab_id)
             abort_on.append(tab.load_started)
         return abort_on
 
@@ -218,7 +230,7 @@ class NetworkManager(QNetworkAccessManager):
 
         assert self._win_id is not None
         try:
-            return objreg.get('tab', scope='tab', window=self._win_id, tab=self._tab_id)
+            return objreg.get("tab", scope="tab", window=self._win_id, tab=self._tab_id)
         except KeyError:
             # https://github.com/qutebrowser/qutebrowser/issues/889
             return None
@@ -226,7 +238,9 @@ class NetworkManager(QNetworkAccessManager):
     def shutdown(self):
         """Abort all running requests."""
         try:
-            self.setNetworkAccessible(QNetworkAccessManager.NetworkAccessibility.NotAccessible)
+            self.setNetworkAccessible(
+                QNetworkAccessManager.NetworkAccessibility.NotAccessible
+            )
         except AttributeError:
             # Qt 5 only, deprecated seemingly without replacement.
             pass
@@ -247,7 +261,8 @@ class NetworkManager(QNetworkAccessManager):
         log.network.debug("Certificate errors: {!r}".format(errors))
         try:
             host_tpl: Optional[urlutils.HostTupleType] = urlutils.host_tuple(
-                reply.url())
+                reply.url()
+            )
         except ValueError:
             host_tpl = None
             is_accepted = False
@@ -257,8 +272,9 @@ class NetworkManager(QNetworkAccessManager):
             is_accepted = errors in self._accepted_ssl_errors[host_tpl]
             is_rejected = errors in self._rejected_ssl_errors[host_tpl]
 
-        log.network.debug("Already accepted: {} / "
-                          "rejected {}".format(is_accepted, is_rejected))
+        log.network.debug(
+            "Already accepted: {} / " "rejected {}".format(is_accepted, is_rejected)
+        )
 
         if is_rejected:
             return
@@ -297,16 +313,24 @@ class NetworkManager(QNetworkAccessManager):
             url: The URL to remove.
         """
         try:
-            del self._rejected_ssl_errors[url]
+            host_tpl = urlutils.host_tuple(url)
+        except ValueError:
+            # Couldn't convert URL to host tuple; nothing to clear.
+            return
+        try:
+            del self._rejected_ssl_errors[host_tpl]
         except KeyError:
             pass
 
-    @pyqtSlot('QNetworkReply*', 'QAuthenticator*')
+    @pyqtSlot("QNetworkReply*", "QAuthenticator*")
     def on_authentication_required(self, reply, authenticator):
         """Called when a website needs authentication."""
         url = reply.url()
-        log.network.debug("Authentication requested for {}, netrc_used {}"
-                          .format(url.toDisplayString(), self.netrc_used))
+        log.network.debug(
+            "Authentication requested for {}, netrc_used {}".format(
+                url.toDisplayString(), self.netrc_used
+            )
+        )
 
         netrc_success = False
         if not self.netrc_used:
@@ -316,10 +340,9 @@ class NetworkManager(QNetworkAccessManager):
         if not netrc_success:
             log.network.debug("Asking for credentials")
             abort_on = self._get_abort_signals(reply)
-            shared.authentication_required(url, authenticator,
-                                           abort_on=abort_on)
+            shared.authentication_required(url, authenticator, abort_on=abort_on)
 
-    @pyqtSlot('QNetworkProxy', 'QAuthenticator*')
+    @pyqtSlot("QNetworkProxy", "QAuthenticator*")
     def on_proxy_authentication_required(self, proxy, authenticator):
         """Called when a proxy needs authentication."""
         proxy_id = ProxyId(proxy.type(), proxy.hostName(), proxy.port())
@@ -328,13 +351,16 @@ class NetworkManager(QNetworkAccessManager):
             authenticator.setUser(authinfo.user)
             authenticator.setPassword(authinfo.password)
         else:
-            msg = '<b>{}</b> says:<br/>{}'.format(
-                html.escape(proxy.hostName()),
-                html.escape(authenticator.realm()))
+            msg = "<b>{}</b> says:<br/>{}".format(
+                html.escape(proxy.hostName()), html.escape(authenticator.realm())
+            )
             abort_on = self._get_abort_signals()
             answer = message.ask(
-                title="Proxy authentication required", text=msg,
-                mode=usertypes.PromptMode.user_pwd, abort_on=abort_on)
+                title="Proxy authentication required",
+                text=msg,
+                mode=usertypes.PromptMode.user_pwd,
+                abort_on=abort_on,
+            )
             if answer is not None:
                 authenticator.setUser(answer.user)
                 authenticator.setPassword(answer.password)
@@ -347,8 +373,9 @@ class NetworkManager(QNetworkAccessManager):
         See the description for adopted_downloads for details.
         """
         self.adopted_downloads -= 1
-        log.downloads.debug("Adopted download destroyed, {} left.".format(
-            self.adopted_downloads))
+        log.downloads.debug(
+            "Adopted download destroyed, {} left.".format(self.adopted_downloads)
+        )
         assert self.adopted_downloads >= 0
         if self.adopted_downloads == 0:
             self.deleteLater()
@@ -357,8 +384,9 @@ class NetworkManager(QNetworkAccessManager):
     def adopt_download(self, download):
         """Adopt a new DownloadItem."""
         self.adopted_downloads += 1
-        log.downloads.debug("Adopted download, {} adopted.".format(
-            self.adopted_downloads))
+        log.downloads.debug(
+            "Adopted download, {} adopted.".format(self.adopted_downloads)
+        )
         download.destroyed.connect(self.on_adopted_download_destroyed)
         download.adopt_download.connect(self.adopt_download)
 
@@ -367,13 +395,14 @@ class NetworkManager(QNetworkAccessManager):
         referer_header_conf = config.val.content.headers.referer
 
         try:
-            if referer_header_conf == 'never':
+            if referer_header_conf == "never":
                 # Note: using ''.encode('ascii') sends a header with no value,
                 # instead of no header at all
-                req.setRawHeader(b'Referer', QByteArray())
-            elif (referer_header_conf == 'same-domain' and
-                  not urlutils.same_domain(req.url(), current_url)):
-                req.setRawHeader(b'Referer', QByteArray())
+                req.setRawHeader(b"Referer", QByteArray())
+            elif referer_header_conf == "same-domain" and not urlutils.same_domain(
+                req.url(), current_url
+            ):
+                req.setRawHeader(b"Referer", QByteArray())
             # If refer_header_conf is set to 'always', we leave the header
             # alone as QtWebKit did set it.
         except urlutils.InvalidUrlError:
@@ -396,15 +425,19 @@ class NetworkManager(QNetworkAccessManager):
             proxy_error = proxymod.application_factory.get_error()
             if proxy_error is not None:
                 return networkreply.ErrorNetworkReply(
-                    req, proxy_error, QNetworkReply.NetworkError.UnknownProxyError,
-                    self)
+                    req, proxy_error, QNetworkReply.NetworkError.UnknownProxyError, self
+                )
 
         if not req.url().isValid():
-            log.network.debug("Ignoring invalid requested URL: {}".format(
-                req.url().errorString()))
+            log.network.debug(
+                "Ignoring invalid requested URL: {}".format(req.url().errorString())
+            )
             return networkreply.ErrorNetworkReply(
-                req, "Invalid request URL", QNetworkReply.NetworkError.HostNotFoundError,
-                self)
+                req,
+                "Invalid request URL",
+                QNetworkReply.NetworkError.HostNotFoundError,
+                self,
+            )
 
         for header, value in shared.custom_headers(url=req.url()):
             req.setRawHeader(header, value)
@@ -418,21 +451,28 @@ class NetworkManager(QNetworkAccessManager):
                 # We could be in the middle of the webpage shutdown here.
                 pass
 
-        request = interceptors.Request(first_party_url=current_url,
-                                       request_url=req.url())
+        request = interceptors.Request(
+            first_party_url=current_url, request_url=req.url()
+        )
         interceptors.run(request)
         if request.is_blocked:
             return networkreply.ErrorNetworkReply(
-                req, HOSTBLOCK_ERROR_STRING, QNetworkReply.NetworkError.ContentAccessDenied,
-                self)
+                req,
+                HOSTBLOCK_ERROR_STRING,
+                QNetworkReply.NetworkError.ContentAccessDenied,
+                self,
+            )
 
-        if 'log-requests' in objects.debug_flags:
+        if "log-requests" in objects.debug_flags:
             operation = debug.qenum_key(QNetworkAccessManager, op)
-            operation = operation.replace('Operation', '').upper()
-            log.network.debug("{} {}, first-party {}".format(
-                operation,
-                req.url().toDisplayString(),
-                current_url.toDisplayString()))
+            operation = operation.replace("Operation", "").upper()
+            log.network.debug(
+                "{} {}, first-party {}".format(
+                    operation,
+                    req.url().toDisplayString(),
+                    current_url.toDisplayString(),
+                )
+            )
 
         scheme = req.url().scheme()
         if scheme in self._scheme_handlers:
